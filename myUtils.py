@@ -22,14 +22,16 @@ def get_iterator(
     final_iterator = PipelineIterator(model_iterator, self.postprocess, postprocess_params)
     return final_iterator
 
-# def forward_fn(model_inputs, **forward_params):
-    # generated_sequence = generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
-    # out_b = generated_sequence.shape[0]
-    # if self.framework == "pt":
-    #     generated_sequence = generated_sequence.reshape(in_b, out_b // in_b, *generated_sequence.shape[1:])
-    # elif self.framework == "tf":
-    #     generated_sequence = tf.reshape(generated_sequence, (in_b, out_b // in_b, *generated_sequence.shape[1:]))
-    # return {"generated_sequence": generated_sequence, "input_ids": input_ids, "prompt_text": prompt_text}
+def forward_fn(model_inputs, **generate_kwargs):
+    input_ids = model_inputs["input_ids"]
+    attention_mask = model_inputs.get("attention_mask", None)
+    generated_sequence = generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
+    out_b = generated_sequence.shape[0]
+    if self.framework == "pt":
+        generated_sequence = generated_sequence.reshape(in_b, out_b // in_b, *generated_sequence.shape[1:])
+    elif self.framework == "tf":
+        generated_sequence = tf.reshape(generated_sequence, (in_b, out_b // in_b, *generated_sequence.shape[1:]))
+    return {"generated_sequence": generated_sequence, "input_ids": input_ids, "prompt_text": prompt_text}
 
 def generate(pipe, messages):
     chat_prompt = Chat(messages)
