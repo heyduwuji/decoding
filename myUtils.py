@@ -70,6 +70,7 @@ def generate(input_ids, attention_mask, **generate_kwargs):
 def forward(_pipe, text_inputs, num_workers):
     global pipe
     pipe = _pipe
+    print(text_inputs)
     chats = [Chat(chat) for chat in text_inputs]
     batch_size = len(chats)
     preprocess_params = {}
