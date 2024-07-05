@@ -10,6 +10,8 @@ from myPipeline import MyPipeline
 from transformers.pipelines.pt_utils import PipelineDataset, PipelineIterator
 from transformers.pipelines.base import pad_collate_fn, no_collate_fn, Pipeline
 
+pipe : TextGenerationPipeline = None
+
 def get_iterator(
     self: Pipeline, inputs, num_workers: int, batch_size: int, preprocess_params, forward_fn, forward_params, postprocess_params
 ):
@@ -19,66 +21,68 @@ def get_iterator(
     collate_fn = no_collate_fn if batch_size == 1 else pad_collate_fn(self.tokenizer, feature_extractor)
     dataloader = DataLoader(dataset, num_workers=num_workers, batch_size=batch_size, collate_fn=collate_fn)
     model_iterator = PipelineIterator(dataloader, forward_fn, forward_params, loader_batch_size=batch_size)
-    final_iterator = PipelineIterator(model_iterator, self.postprocess, postprocess_params)
+    final_iterator = PipelineIterator(model_iterator, postprocess, postprocess_params)
     return final_iterator
 
 def forward_fn(model_inputs, **generate_kwargs):
     input_ids = model_inputs["input_ids"]
+    # Allow empty prompts
+    if input_ids.shape[1] == 0:
+        input_ids = None
+        attention_mask = None
+        in_b = 1
+    else:
+        in_b = input_ids.shape[0]
+    prompt_text = model_inputs.pop("prompt_text")
     attention_mask = model_inputs.get("attention_mask", None)
     generated_sequence = generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
     out_b = generated_sequence.shape[0]
-    if self.framework == "pt":
-        generated_sequence = generated_sequence.reshape(in_b, out_b // in_b, *generated_sequence.shape[1:])
-    elif self.framework == "tf":
-        generated_sequence = tf.reshape(generated_sequence, (in_b, out_b // in_b, *generated_sequence.shape[1:]))
+    generated_sequence = generated_sequence.reshape(in_b, out_b // in_b, *generated_sequence.shape[1:])
+    # TODO: compute scores and return logis, scores
     return {"generated_sequence": generated_sequence, "input_ids": input_ids, "prompt_text": prompt_text}
 
-def generate(pipe, messages):
-    chat_prompt = Chat(messages)
-    input_prompt = pipe.tokenizer.apply_chat_template(
-                    chat_prompt.messages,
-                    truncation=None,
-                    padding=False,
-                    max_length=None,
-                    add_generation_prompt=True,
-                    return_dict=True,
-                    return_tensors="pt",
-                    tokenize=False
-                )
-    input_tokenized = pipe.tokenizer.tokenize(input_prompt)
-    # new_tokenized = []
-    # for t in input_tokenized:
-    #     if t.isdigit() and len(t) > 1:
-    #         new_tokenized.extend(list(t))
-    #     else:
-    #         new_tokenized.append(t)
-    # input_tokenized = new_tokenized
-    input_ids = pipe.tokenizer.convert_tokens_to_ids(input_tokenized)
-    input_ids = torch.tensor(input_ids).unsqueeze(0)
+def generate(input_ids, attention_mask, **generate_kwargs):
+    global pipe
+    pad_token_id = pipe.tokenizer.pad_token_id
+    eos_token_id = pipe.tokenizer.eos_token_id
     answer = ""
+    unfinished_sequences = torch.ones(input_ids.shape[0], dtype=torch.long, device=input_ids.device)
+    if isinstance(eos_token_id, int):
+        eos_token_id = [eos_token_id]
+    eos_token_id_tensor = torch.tensor(eos_token_id).to(input_ids.device)
+    this_peer_finished = False
     while True:
         outputs = pipe.model.forward(input_ids)
-        next_token_id = torch.argmax(outputs['logits'][:, -1, :])
-        answer += pipe.tokenizer.decode(next_token_id, skip_special_tokens=True)
-        input_ids = torch.cat([input_ids, next_token_id.unsqueeze(0).unsqueeze(0)], dim=1)
-        if next_token_id == pipe.tokenizer.eos_token_id:
+        next_tokens = torch.argmax(outputs['logits'][:, -1, :], dim=-1)
+        next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
+        print(eos_token_id, next_tokens)
+        answer += pipe.tokenizer.decode(next_tokens, skip_special_tokens=True)
+        input_ids = torch.cat([input_ids, next_tokens.unsqueeze(-1)], dim=1)
+        unfinished_sequences = unfinished_sequences.mul(
+                    next_tokens.tile(eos_token_id_tensor.shape[0], 1).ne(eos_token_id_tensor.unsqueeze(1)).prod(dim=0)
+                )
+        if unfinished_sequences.max() == 0:
+                    this_peer_finished = True
+        if this_peer_finished:
             break
-    return answer
+    return input_ids
 
-# terminators = [
-#     pipe.tokenizer.eos_token_id,
-#     pipe.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-# ]
-# pipe.tokenizer.pad_token_id = pipe.tokenizer.eos_token_id
-# pipe.tokenizer.padding_side = "left"
+def forward(_pipe, text_inputs, num_workers):
+    global pipe
+    pipe = _pipe
+    chats = [Chat(chat) for chat in text_inputs]
+    batch_size = len(chats)
+    preprocess_params = {}
+    forward_params = {}
+    postprocess_params = {}
+    final_iterator = get_iterator(
+        pipe, chats, num_workers, batch_size, preprocess_params, forward_fn, forward_params, postprocess_params
+    )
+    outputs = list(final_iterator)
+    outputs = [x[0]['generated_text'][-1]['content'] for x in outputs]
+    return outputs
 
-# outputs = pipe(
-#     messages,
-#     max_new_tokens=10,
-#     eos_token_id=terminators,
-#     early_stopping=True,
-#     output_logits=True,
-#     return_dict_in_generate=True,
-# )
-
-# print(outputs)
+def postprocess(outputs, **kwargs):
+    #TODO: return logits and scores, maybe hidden_states
+    print(outputs)
+    return outputs

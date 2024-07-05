@@ -6,10 +6,10 @@ from transformers.pipelines.text_generation import TextGenerationPipeline
 from transformers.tokenization_utils_fast import PreTrainedTokenizerFast
 from transformers.models.llama.modeling_llama import LlamaModel, LlamaForCausalLM
 from tqdm import tqdm
-from myUtils import generate
+from myUtils import forward
 
 model_id = "/data1/zhaoed/models/meta-llama/Meta-Llama-3-8B-Instruct"
-batch_size = 1
+batch_size = 8
 
 pipe = pipeline(
     "text-generation",
@@ -19,8 +19,8 @@ pipe = pipeline(
     batch_size=batch_size,
 )
 
-# prompt = {"role": "system", "content": "You are a helpful assistant. You will receive a query. Please directly output the answer starting with \"The answer is\" without any prefix."}
-prompt = {"role": "system", "content": "You are a helpful assistant. You will receive a query. Please think step-by-step and output each step of thingking, finally output the answer in a new line in a format \"So the answer is [answer]\", while [answer] should be only one word."}
+prompt = {"role": "system", "content": "You are a helpful assistant. You will receive a query. Please directly output the answer starting with \"The answer is\" without any prefix."}
+# prompt = {"role": "system", "content": "You are a helpful assistant. You will receive a query. Please think step-by-step and output each step of thingking, finally output the answer in a new line in a format \"So the answer is [answer]\", while [answer] should be only one word."}
 
 # messages = [
 #     # {"role": "system", "content": "You are a caculator, accept an equation and return the result only in decimal number."},
@@ -40,9 +40,7 @@ def formatting_func(example):
     text = {"role": "user", "content": f"{example['story']}\n{query[1]} is the WHAT of {query[0]}?"}
     return text
 
-# dataset = load_dataset("json", data_files={"test": "data/test-harder.json"})
 dataset = load_dataset("CLUTRR/v1", "rob_train_clean_23_test_all_23", split="test")
-# dataloader = DataLoader(dataset["test"], batch_size=batch_size, shuffle=True)
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 print(pipe.__class__)
@@ -59,8 +57,9 @@ for batch in tqdm(dataloader):
     for x in batch:
         messages.append([prompt, formatting_func(x)])
         target.append(x['target_text'])
-    outputs = generate(pipe, messages[0])
-    result = [outputs]
+    outputs = forward(pipe, messages, 4)
+    result = outputs
+    print(result)
     answer = [y.split(' ')[-1][:-1] for y in result]
     print(answer, target)
     for i, x in enumerate(answer):
